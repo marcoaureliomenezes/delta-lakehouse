@@ -1,0 +1,97 @@
+
+x-common-log-config: &default_config
+  networks:
+    - delta_lakehouse
+
+x-common-healthcheck-default: &default_healthcheck
+  timeout: 45s
+  interval: 10s
+  retries: 10
+  start_period: 10s
+
+
+x-spark-worker-default: &spark_worker_default
+  build: ../docker/spark
+  <<: *default_config
+  env_file:
+    - ./conf/.minio.conf
+  environment:
+    - SPARK_MODE=worker
+    - SPARK_MASTER_URL=spark://spark-master:7077
+    - SPARK_WORKER_MEMORY=1G
+    - SPARK_WORKER_CORES=1
+    - SPARK_RPC_AUTHENTICATION_ENABLED=no
+    - SPARK_RPC_ENCRYPTION_ENABLED=no
+    - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+    - SPARK_SSL_ENABLED=no
+    - SPARK_USER=spark
+  healthcheck:
+    test: [ "CMD", "ls" ]
+    <<: *default_healthcheck
+
+
+services:
+
+  notebook:
+    build: ../docker/notebook
+    container_name: notebook
+    <<: *default_config
+    env_file:
+      - ./conf/.minio.conf
+    volumes:
+      - ../mnt/notebooks:/app/notebooks
+    ports:
+      - 8888:8888
+      # - 8080:8080
+      # - 10000:10000
+      # - 10001:10001
+    environment:
+      NESSIE_URI: http://nessie:19120/api/v1
+      MINIO_HOST: http://minio:9000
+
+
+  spark-master:
+    build: ../docker/spark
+    container_name: spark-master
+    <<: *default_config
+    env_file:
+      - ./conf/.minio.conf
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_METRICS_MASTER_ENABLED=true
+      - SPARK_SSL_ENABLED=no
+      - SPARK_USER=spark
+    ports:
+      - '18080:8080'
+    healthcheck:
+      test: [ "CMD", "ls" ]
+      <<: *default_healthcheck
+
+  spark-worker-1:
+    container_name: spark-worker-1
+    <<: *spark_worker_default
+
+  spark-worker-2:
+    container_name: spark-worker-2
+    <<: *spark_worker_default
+
+
+
+  trino:
+    image: trinodb/trino
+    container_name: trino
+    <<: *default_config
+    environment:
+      - DISCOVERY_SERVER_ENABLED=true
+      - HTTP_PORT=8080
+    volumes:
+      - ../mnt/trino/conf:/etc/trino/catalog
+    ports:
+      - "28080:8080"
+
+networks:
+  delta_lakehouse:
+    name: delta_lakehouse

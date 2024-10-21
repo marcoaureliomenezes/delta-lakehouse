@@ -1,0 +1,6 @@
+pyspark
+requests
+jupyterlab
+ipython_sql
+delta-spark==3.2.0
+trino

@@ -1,0 +1,134 @@
+version: "3"
+
+x-common-log-config: &default_config
+  networks:
+    - delta_lakehouse
+  restart: always
+
+x-common-healthcheck-default: &default_healthcheck
+  timeout: 45s
+  interval: 10s
+  retries: 10
+  start_period: 10s
+
+
+services:
+
+
+  namenode:
+    build: ../docker/hadoop/namenode
+    container_name: namenode
+    <<: *default_config
+    ports:
+      - 9870:9870
+      - 9000:9000
+    volumes:
+      - delta_lake_namenode:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=delta_lakehouse
+    env_file:
+      - ./conf/hadoop_env_vars.conf
+
+
+  datanode:
+    build: ../docker/hadoop/datanode
+    container_name: datanode
+    <<: *default_config
+    volumes:
+      - delta_lake_datanode:/hadoop/dfs/data
+    environment:
+      SERVICE_PRECONDITION: "namenode:9870"
+    env_file:
+      - ./conf/hadoop_env_vars.conf
+
+
+  # minio:
+  #   image: minio/minio:RELEASE.2023-07-21T21-12-44Z
+  #   container_name: minio
+  #   env_file:
+  #     - ./conf/.minio.conf
+  #   <<: *default_config
+  #   volumes:
+  #     - minio_dev_vol:/data
+  #   ports:
+  #     - 9001:9001
+  #     - 9000:9000
+  #   command: ["server", "/data", "--console-address", ":9001"]
+
+  postgres_hive:
+    build: ../docker/postgres/
+    <<: *default_config
+    container_name: postgres_hive
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: metastore_db
+    volumes:
+      - delta_lake_postgres:/var/lib/postgresql/data
+
+  metastore:
+    build: ../docker/hive/
+    container_name: metastore
+    ports:
+      - "9083:9083"
+    <<: *default_config
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: "-Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver 
+                     -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres_hive:5432/metastore_db 
+                     -Djavax.jdo.option.ConnectionUserName=hive
+                     -Djavax.jdo.option.ConnectionPassword=hive"
+    depends_on:
+      - postgres_hive
+      
+  hive-server:
+    build: ../docker/hive/
+    container_name: hive-server
+    <<: *default_config
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    environment:
+      SERVICE_NAME: hiveserver2
+      SERVICE_OPTS: "-Dhive.metastore.uris=thrift://metastore:9083"
+      IS_RESUME: "true"
+    depends_on:
+      - metastore
+
+  hue:
+    build: ../docker/hue/
+    container_name: hue-webui
+    ports:
+      - "32762:8888"
+    <<: *default_config
+    volumes:
+      - ../mnt/hue/hue.ini:/usr/share/hue/desktop/conf/z-hue.ini
+    environment:
+      SERVICE_PRECONDITION: "hive-server:10000 postgres_hive:5432"
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "hue-webui", "8888" ]
+      <<: *default_healthcheck
+
+  dremio:
+    image: dremio/dremio-oss:25.1
+    container_name: dremio
+    <<: *default_config
+    ports:
+      - 9047:9047
+      - 31010:31010
+      - 32010:32010
+    volumes:
+      - delta_lake_dremio:/opt/dremio/data
+
+
+volumes:
+  delta_lake_namenode:
+  delta_lake_datanode:
+  delta_lake_postgres:
+  delta_lake_dremio:
+
+
+networks:
+  delta_lakehouse:
+    name: delta_lakehouse
